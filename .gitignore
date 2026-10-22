@@ -12,7 +12,3 @@
 !*.mk
 !csrc/
 !csrc/**
-!docs/
-!docs/**
-!tb/
-!tb/**
