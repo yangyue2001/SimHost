@@ -1,0 +1,18 @@
+# Ignore everything by default.
+*
+
+# Keep this ignore file.
+!.gitignore
+
+# Source
+!scripts/
+!scripts/**
+!Makefile
+!makefile
+!*.mk
+!csrc/
+!csrc/**
+!docs/
+!docs/**
+!tb/
+!tb/**
