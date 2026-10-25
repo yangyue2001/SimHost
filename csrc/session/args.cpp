@@ -18,10 +18,12 @@ enum {
   OPT_DUMP_WAVE,
   OPT_DUMP_WAVE_FULL,
   OPT_WAVE_PATH,
+  OPT_ASSERT,
+  OPT_NO_ASSERT,
   OPT_SERVICE_BASE = 2000,
 };
 
-void print_help(const char *argv0) {
+void print_help(const char *argv0, const OptionSet &extra) {
   std::printf("Usage: %s [OPTION...]\n", argv0);
   std::printf("  -h, --help                 show this help and exit\n");
   std::printf(
@@ -43,6 +45,22 @@ void print_help(const char *argv0) {
       "      --dump-wave            trace only the rising half-cycle\n");
   std::printf("      --dump-wave-full       trace both half-cycles\n");
   std::printf("      --wave-path=FILE       waveform output path\n");
+  std::printf(
+      "      --assert               enable Verilog assertions after reset "
+      "(default)\n");
+  std::printf(
+      "      --no-assert            keep Verilog assertions disabled\n");
+  for (const RegisteredOption &option : extra.items()) {
+    if (option.help.empty()) {
+      continue;
+    }
+    if (option.takes_value) {
+      std::printf("      --%s=VAL\n", option.name.c_str());
+    } else {
+      std::printf("      --%s\n", option.name.c_str());
+    }
+    std::printf("          %s\n", option.help.c_str());
+  }
 }
 
 bool parse_u64(const char *text, const char *option, uint64_t *out) {
@@ -110,6 +128,8 @@ ParseStatus parse_args(int argc, char **argv, OptionSet &extra,
   add_long("dump-wave", no_argument, OPT_DUMP_WAVE);
   add_long("dump-wave-full", no_argument, OPT_DUMP_WAVE_FULL);
   add_long("wave-path", required_argument, OPT_WAVE_PATH);
+  add_long("assert", no_argument, OPT_ASSERT);
+  add_long("no-assert", no_argument, OPT_NO_ASSERT);
   const std::vector<RegisteredOption> &service_options = extra.items();
   for (size_t index = 0; index < service_options.size(); ++index) {
     add_long(
@@ -134,7 +154,7 @@ ParseStatus parse_args(int argc, char **argv, OptionSet &extra,
     }
     switch (value) {
       case 'h':
-        print_help(pointers[0]);
+        print_help(pointers[0], extra);
         return ParseStatus::Help;
       case 'C':
         if (!parse_u64(optarg, "max-cycles", &args->max_cycles)) {
@@ -174,6 +194,12 @@ ParseStatus parse_args(int argc, char **argv, OptionSet &extra,
       case OPT_WAVE_PATH:
         args->wave_path = optarg;
         break;
+      case OPT_ASSERT:
+        args->enable_assert = true;
+        break;
+      case OPT_NO_ASSERT:
+        args->enable_assert = false;
+        break;
       case '?':
         return ParseStatus::Error;
       default:
@@ -199,10 +225,9 @@ ParseStatus parse_args(int argc, char **argv, OptionSet &extra,
                  "--log-begin must be less than or equal to --log-end\n");
     return ParseStatus::Error;
   }
-  if (args->dump_wave_full &&
+  if (args->dump_wave &&
       args->log_begin > std::numeric_limits<uint64_t>::max() / 2) {
-    std::fprintf(stderr,
-                 "--log-begin is too large for a full waveform timestamp\n");
+    std::fprintf(stderr, "--log-begin is too large for a waveform timestamp\n");
     return ParseStatus::Error;
   }
   return ParseStatus::Ok;

@@ -6,6 +6,7 @@
 
 struct RegisteredOption {
   std::string name;
+  std::string help;
   bool takes_value;
   bool (*apply)(void* context, const char* value);
   void* context;
@@ -13,10 +14,10 @@ struct RegisteredOption {
 
 class OptionSet {
  public:
-  void add_flag(const char* name, bool* slot);
+  void add_flag(const char* name, bool* slot, const char* help = nullptr);
   void add_value(const char* name,
                  bool (*apply)(void* context, const char* value),
-                 void* context);
+                 void* context, const char* help = nullptr);
   const std::vector<RegisteredOption>& items() const { return items_; }
 
  private:

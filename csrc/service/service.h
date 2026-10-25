@@ -9,13 +9,6 @@ constexpr int STATE_LIMIT = 2;
 constexpr int STATE_SIGNAL = 3;
 constexpr int STATE_RUNNING = -1;
 
-enum class SimPhase {
-  AfterPosedge,
-  MidCycle,
-  AfterNegedge,
-  EndCycle,
-};
-
 struct SimArgsView {
   uint64_t max_cycles;
   uint32_t reset_cycles;
@@ -39,9 +32,11 @@ class SimService {
   virtual ~SimService() = default;
   virtual const char *name() const = 0;
   virtual void register_options(OptionSet &) {}
-  virtual void init(const SimContext &) {}
-  virtual void on_phase(SimPhase, const SimContext &) {}
-  virtual int poll_trap() const { return STATE_RUNNING; }
+  // Return false to stop before the main loop.
+  virtual bool init(const SimContext &) { return true; }
+  // After the rising eval, before the falling edge. Return STATE_RUNNING or a
+  // trap.
+  virtual int on_posedge(const SimContext &) { return STATE_RUNNING; }
   virtual void at_clone() {}
   virtual void finish() {}
 };

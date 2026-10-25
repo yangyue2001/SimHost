@@ -35,6 +35,7 @@ expect_fail() {
 mkdir -p build
 
 expect_ok build/help "$SIM" --help
+grep -q -- "--no-assert" build/help.out || fail "help assert option"
 expect_fail build/bad-option "$SIM" --not-an-option
 expect_fail build/bad-reset "$SIM" --reset-cycles=0
 
@@ -46,6 +47,12 @@ fi
 
 expect_ok build/good "$SIM" --reset-cycles=2 --max-cycles=10000
 grep -q "GOOD TRAP at cycle 200" build/good.out || fail "good trap text"
+
+expect_ok build/noassert "$SIM" --reset-cycles=2 --max-cycles=10000 --no-assert
+grep -q "GOOD TRAP at cycle 200" build/noassert.out || fail "no-assert trap text"
+
+expect_ok build/assert "$SIM" --reset-cycles=2 --max-cycles=10000 --no-assert --assert
+grep -q "GOOD TRAP at cycle 200" build/assert.out || fail "assert trap text"
 
 expect_ok build/pos "$SIM" --reset-cycles=2 --max-cycles=8 --dump-wave --wave-path=build/pos.vcd
 python3 scripts/check_wave.py build/pos.vcd pos

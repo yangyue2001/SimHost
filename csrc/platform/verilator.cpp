@@ -11,7 +11,17 @@ namespace {
 
 class VerilatorPlatform final : public Platform {
  public:
-  VerilatorPlatform() : dut_(new VTop) {}
+  VerilatorPlatform(int argc, char** argv, uint32_t seed) : dut_(nullptr) {
+    Verilated::commandArgs(argc, argv);
+    if (seed == 0) {
+      Verilated::randReset(0);
+    } else {
+      Verilated::randSeed(static_cast<int>(seed));
+      Verilated::randReset(2);
+    }
+    Verilated::assertOn(false);
+    dut_ = new VTop;
+  }
 
   ~VerilatorPlatform() override {
     close_waveform();
@@ -39,10 +49,11 @@ class VerilatorPlatform final : public Platform {
 #endif
   }
 
-  bool waveform_open(uint64_t start_time, const char* path) override {
+  bool waveform_open(const char* path) override {
     if (!trace_compiled() || path == nullptr) {
       return false;
     }
+
     FILE* probe = std::fopen(path, "w");
     if (probe == nullptr) {
       return false;
@@ -50,18 +61,19 @@ class VerilatorPlatform final : public Platform {
     std::fclose(probe);
 
     Verilated::traceEverOn(true);
-    waveform_ = std::make_unique<Waveform>(start_time);
+    waveform_ = std::make_unique<Waveform>();
     if (waveform_->tracer() == nullptr) {
       waveform_.reset();
       return false;
     }
+
     dut_->trace(waveform_->tracer(), 99);
     return waveform_->open(path);
   }
 
-  void waveform_dump() override {
+  void waveform_dump(uint64_t time) override {
     if (waveform_ != nullptr) {
-      waveform_->dump();
+      waveform_->dump(time);
     }
   }
 
@@ -78,13 +90,7 @@ class VerilatorPlatform final : public Platform {
 
 }  // namespace
 
-std::unique_ptr<Platform> create_platform(uint32_t seed) {
-  if (seed == 0) {
-    Verilated::randReset(0);
-  } else {
-    Verilated::randSeed(static_cast<int>(seed));
-    Verilated::randReset(2);
-  }
-  Verilated::assertOn(false);
-  return std::make_unique<VerilatorPlatform>();
+std::unique_ptr<Platform> create_platform(int argc, char** argv,
+                                          uint32_t seed) {
+  return std::make_unique<VerilatorPlatform>(argc, argv, seed);
 }

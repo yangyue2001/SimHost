@@ -13,7 +13,7 @@ using TraceFile = VerilatedVcdC;
 static TraceFile* as_file(void* file) { return static_cast<TraceFile*>(file); }
 #endif
 
-Waveform::Waveform(uint64_t start_time) : time_(start_time), file_(nullptr) {
+Waveform::Waveform() : file_(nullptr) {
 #if defined(EMU_TRACE_FST) || defined(EMU_TRACE_VCD)
   file_ = new TraceFile();
 #endif
@@ -52,13 +52,14 @@ bool Waveform::open(const char* path) {
 #endif
 }
 
-void Waveform::dump() {
+void Waveform::dump(uint64_t time) {
 #if defined(EMU_TRACE_FST) || defined(EMU_TRACE_VCD)
   TraceFile* file = as_file(file_);
   if (file == nullptr) {
     return;
   }
-  file->dump(time_);
-  time_ += 1;
+  file->dump(time);
+#else
+  (void)time;
 #endif
 }

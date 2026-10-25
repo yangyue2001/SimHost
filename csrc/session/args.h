@@ -15,6 +15,7 @@ struct SessionArgs {
   uint64_t log_end = std::numeric_limits<uint64_t>::max();
   bool dump_wave = false;
   bool dump_wave_full = false;
+  bool enable_assert = true;
   std::string wave_path;
 };
 

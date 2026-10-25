@@ -1,5 +1,3 @@
-#include <verilated.h>
-
 #include <cinttypes>
 #include <cstdio>
 
@@ -7,7 +5,6 @@
 #include "session/signals.h"
 
 int main(int argc, char** argv) {
-  Verilated::commandArgs(argc, argv);
   install_signal_handlers();
 
   Session session;

@@ -10,9 +10,10 @@ bool SetFlag(void* context, const char* /*value*/) {
 
 }  // namespace
 
-void OptionSet::add_flag(const char* name, bool* slot) {
+void OptionSet::add_flag(const char* name, bool* slot, const char* help) {
   RegisteredOption option;
   option.name = name;
+  option.help = help == nullptr ? "" : help;
   option.takes_value = false;
   option.apply = SetFlag;
   option.context = slot;
@@ -21,9 +22,10 @@ void OptionSet::add_flag(const char* name, bool* slot) {
 
 void OptionSet::add_value(const char* name,
                           bool (*apply)(void* context, const char* value),
-                          void* context) {
+                          void* context, const char* help) {
   RegisteredOption option;
   option.name = name;
+  option.help = help == nullptr ? "" : help;
   option.takes_value = true;
   option.apply = apply;
   option.context = context;

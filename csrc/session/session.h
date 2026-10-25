@@ -30,6 +30,8 @@ class Session {
  private:
   std::vector<std::unique_ptr<SimService>> services_;
   SessionArgs args_;
+  int argc_;
+  char** argv_;
   bool ready_;
 };
 

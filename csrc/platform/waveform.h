@@ -7,7 +7,7 @@ class VerilatedTraceBaseC;
 
 class Waveform {
  public:
-  explicit Waveform(uint64_t start_time);
+  Waveform();
   ~Waveform();
 
   Waveform(const Waveform&) = delete;
@@ -15,10 +15,9 @@ class Waveform {
 
   VerilatedTraceBaseC* tracer();
   bool open(const char* path);
-  void dump();
+  void dump(uint64_t time);
 
  private:
-  uint64_t time_;
   void* file_;
 };
 

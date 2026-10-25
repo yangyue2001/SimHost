@@ -12,3 +12,8 @@
 !*.mk
 !csrc/
 !csrc/**
+
+# Submodule gitlink. Contents stay in the DRAMsim3 repository.
+!.gitmodules
+!third_party/
+!third_party/DRAMsim3

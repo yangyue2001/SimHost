@@ -13,12 +13,12 @@ class Platform {
   virtual uint64_t exit_code() const = 0;
   virtual bool trace_compiled() const = 0;
   virtual const char* default_waveform_name() const = 0;
-  virtual bool waveform_open(uint64_t start_time, const char* path) = 0;
-  virtual void waveform_dump() = 0;
+  virtual bool waveform_open(const char* path) = 0;
+  virtual void waveform_dump(uint64_t time) = 0;
   virtual void close_waveform() = 0;
   virtual void set_assertions_enabled(bool enabled) = 0;
 };
 
-std::unique_ptr<Platform> create_platform(uint32_t seed);
+std::unique_ptr<Platform> create_platform(int argc, char** argv, uint32_t seed);
 
 #endif
