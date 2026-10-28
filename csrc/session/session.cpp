@@ -1,6 +1,8 @@
 #include "session/session.h"
 
+#include <cinttypes>
 #include <cstdio>
+#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -15,6 +17,19 @@ namespace {
 static inline void drive_half(Platform* platform, unsigned clock_level) {
   platform->set_clock(clock_level);
   platform->eval();
+}
+
+// sim.vcd at cycle 40 becomes sim_40.vcd. The child does not reuse --wave-path.
+void checkpoint_wave_path(const Platform* platform, uint64_t cycle, char* out,
+                          size_t size) {
+  const char* base = platform->default_waveform_name();
+  const char* dot = std::strrchr(base, '.');
+  if (dot == nullptr) {
+    std::snprintf(out, size, "%s_%" PRIu64, base, cycle);
+    return;
+  }
+  std::snprintf(out, size, "%.*s_%" PRIu64 "%s", static_cast<int>(dot - base),
+                base, cycle, dot);
 }
 
 SimArgsView make_view(const SessionArgs& args) {
@@ -90,7 +105,15 @@ SessionResult Session::run() {
   platform->set_reset(1);
   platform->eval();
 
-  if (args.dump_wave) {
+  // --fork turns the parent waveform off. The resumed child opens its own.
+  bool defer_wave = false;
+  for (const std::unique_ptr<SimService>& service : services_) {
+    if (service->defer_waveform()) {
+      defer_wave = true;
+    }
+  }
+  bool record = false;
+  if (args.dump_wave && !defer_wave) {
     if (!platform->trace_compiled()) {
       std::fprintf(stderr,
                    "waveform was requested, but this binary was built without "
@@ -105,6 +128,7 @@ SessionResult Session::run() {
                    args.wave_path.c_str());
       return result;
     }
+    record = true;
   }
 
   // Reset is not an architectural cycle, so it does not move the timestamp.
@@ -121,6 +145,8 @@ SessionResult Session::run() {
   SimContext context;
   context.cycle = 0;
   context.args = &view;
+  context.clone_requested = false;
+  context.waveform_requested = false;
   for (const std::unique_ptr<SimService>& service : services_) {
     if (!service->init(context)) {
       return result;
@@ -133,16 +159,40 @@ SessionResult Session::run() {
   // cycle * 2, and a full trace also records the falling edge at cycle * 2 + 1.
   int trap = STATE_RUNNING;
   uint64_t cycle = 0;
+  // Set on the checkpoint cycle. Recording starts on the following cycle.
+  bool child_wave_pending = false;
+  uint64_t child_wave_cycle = 0;
+  bool force_dump = false;
   while (trap == STATE_RUNNING && cycle < args.max_cycles) {
+    if (child_wave_pending) {
+      char path[128];
+      checkpoint_wave_path(platform.get(), child_wave_cycle, path, sizeof(path));
+      if (!platform->trace_compiled()) {
+        std::fprintf(stderr,
+                     "LightSSS checkpoint cannot dump waveform: this binary "
+                     "was built without EMU_TRACE\n");
+      } else if (!platform->waveform_open(path)) {
+        std::fprintf(stderr, "cannot open waveform file %s\n", path);
+      } else {
+        std::printf("dump wave to %s...\n", path);
+        force_dump = true;
+      }
+      child_wave_pending = false;
+    }
+
     if (signal_requested()) {
       trap = STATE_SIGNAL;
       break;
     }
 
     context.cycle = cycle;
+    context.clone_requested = false;
+    context.waveform_requested = false;
     drive_half(platform.get(), 1);
 #if defined(EMU_TRACE_VCD) || defined(EMU_TRACE_FST)
-    if (args.dump_wave && args.log_begin <= cycle && cycle <= args.log_end) {
+    const bool dump_this =
+        force_dump || (record && args.log_begin <= cycle && cycle <= args.log_end);
+    if (dump_this) {
       platform->waveform_dump(cycle * 2);
     }
 #endif
@@ -155,10 +205,23 @@ SessionResult Session::run() {
         break;
       }
     }
+    // The resumed checkpoint sets this from inside on_posedge.
+    if (context.clone_requested) {
+      platform->at_clone();
+      for (const std::unique_ptr<SimService>& service : services_) {
+        service->at_clone();
+      }
+      context.clone_requested = false;
+    }
+    if (context.waveform_requested) {
+      child_wave_pending = true;
+      child_wave_cycle = cycle + 1;
+      context.waveform_requested = false;
+    }
+
     drive_half(platform.get(), 0);
 #if defined(EMU_TRACE_VCD) || defined(EMU_TRACE_FST)
-    if (args.dump_wave_full && args.log_begin <= cycle &&
-        cycle <= args.log_end) {
+    if (dump_this && args.dump_wave_full) {
       platform->waveform_dump(cycle * 2 + 1);
     }
 #endif
@@ -178,7 +241,7 @@ SessionResult Session::run() {
   }
 
   for (const std::unique_ptr<SimService>& service : services_) {
-    service->finish();
+    service->finish(trap);
   }
   platform->close_waveform();
 

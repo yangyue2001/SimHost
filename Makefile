@@ -67,7 +67,7 @@ $(BUILD_DIR)/dramsim3_paths.h:
 	  "$(abspath $(DRAMSIM3_DIR)/configs/XiangShan.ini)" \
 	  "$(abspath $(BUILD_DIR)/dramsim3-out)" > $@
 
-.PHONY: smoke check clean dram dram-check
+.PHONY: smoke check clean dram dram-check ram ram-check lightsss-check lightsss-wave-check
 .PHONY: compile-commands
 
 smoke: $(BIN)
@@ -106,6 +106,25 @@ dram-check: dram
 	$(MAKE) smoke EMU_TRACE=1
 	./scripts/check_dramsim3.sh
 
+ram:
+	$(MAKE) smoke EMU_TRACE=0 BIN=$(abspath $(BUILD_DIR)/sim-ram) \
+	  OBJ_DIR=$(abspath $(BUILD_DIR)/obj-ram) \
+	  RTL="tb/RamProof.sv tb/dpi/SimAXIMem.sv"
+
+ram-check: ram
+	./scripts/check_ram.sh
+
+lightsss-check: $(DRAMSIM3_LIB) $(BUILD_DIR)/dramsim3_paths.h
+	$(MAKE) smoke WITH_DRAMSIM3=1 EMU_TRACE=0 \
+	  RTL="tb/LightsssProof.sv tb/dpi/SimAXIMem.sv"
+	./scripts/check_lightsss.sh
+
+lightsss-wave-check: $(DRAMSIM3_LIB) $(BUILD_DIR)/dramsim3_paths.h
+	$(MAKE) smoke WITH_DRAMSIM3=1 EMU_TRACE=1 \
+	  BIN=$(abspath $(BUILD_DIR)/sim-lightsss-wave) \
+	  OBJ_DIR=$(abspath $(BUILD_DIR)/obj-lightsss-wave) \
+	  RTL="tb/LightsssProof.sv tb/dpi/SimAXIMem.sv"
+	./scripts/check_lightsss_wave.sh
 
 compile-commands: $(OBJ_DIR)/$(PREFIX).mk
 	bear --output $(abspath compile_commands.json) -- $(MAKE) -C $(OBJ_DIR) -f $(PREFIX).mk -B OBJCACHE=

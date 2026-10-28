@@ -13,6 +13,9 @@ class VerilatorPlatform final : public Platform {
  public:
   VerilatorPlatform(int argc, char** argv, uint32_t seed) : dut_(nullptr) {
     Verilated::commandArgs(argc, argv);
+    // The default context uses one worker per CPU. Those threads do not
+    // survive fork(), and atClone() then crashes. This model is one thread.
+    Verilated::threadContextp()->threads(1);
     if (seed == 0) {
       Verilated::randReset(0);
     } else {
@@ -82,6 +85,8 @@ class VerilatorPlatform final : public Platform {
   void set_assertions_enabled(bool enabled) override {
     Verilated::assertOn(enabled);
   }
+
+  void at_clone() override { dut_->atClone(); }
 
  private:
   VTop* dut_;

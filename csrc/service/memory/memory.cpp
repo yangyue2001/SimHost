@@ -83,7 +83,7 @@ bool make_directory(const char* path) {
 MemoryService::MemoryService()
     : ram_bytes_(kDefaultRamBytes), dram_(nullptr), failed_(false) {}
 
-MemoryService::~MemoryService() { finish(); }
+MemoryService::~MemoryService() { finish(STATE_RUNNING); }
 
 const char* MemoryService::name() const { return "memory"; }
 
@@ -134,15 +134,23 @@ void MemoryService::register_options(OptionSet& options) {
 }
 
 bool MemoryService::init(const SimContext&) {
-#ifndef WITH_DRAMSIM3
-  // No timing library in this binary, so leave current_service unset.
-  return true;
-#else
-  // Both the functional RAM and the timing model are created before the loop.
+  // The functional RAM exists in every build. DRAMSim3 is only the timing
+  // backend, and only when this binary was built with it.
   if (current_service != nullptr) {
     std::fprintf(stderr, "only one memory service is supported\n");
     return false;
   }
+#ifndef WITH_DRAMSIM3
+  if (ram_bytes_ / 8 == 0) {
+    std::fprintf(stderr, "--ram-size is too small\n");
+    return false;
+  }
+  words_.assign(static_cast<size_t>(ram_bytes_ / 8), 0);
+  current_service = this;
+  std::printf("functional RAM: %" PRIu64 " bytes\n", ram_bytes_);
+  return true;
+#else
+  // Both the functional RAM and the timing model are created before the loop.
   const char* config = ini_.empty() ? DRAMSIM3_CONFIG : ini_.c_str();
   const char* outdir = outdir_.empty() ? DRAMSIM3_OUTDIR : outdir_.c_str();
   FILE* file = std::fopen(config, "r");
@@ -167,7 +175,7 @@ bool MemoryService::init(const SimContext&) {
 #endif
 }
 
-int MemoryService::on_posedge(const SimContext&) {
+int MemoryService::on_posedge(SimContext&) {
   if (failed_) {
     return STATE_ABORT;
   }
@@ -177,13 +185,18 @@ int MemoryService::on_posedge(const SimContext&) {
   if (dram_ != nullptr) {
     static_cast<CoDRAMsim3*>(dram_)->tick();
   }
+#else
+  // Publish the requests accepted during this rising eval. The same eval
+  // already polled memory_response, so it cannot see them until next cycle.
+  ready_.insert(ready_.end(), held_.begin(), held_.end());
+  held_.clear();
 #endif
   return STATE_RUNNING;
 }
 
 // Safe to call from the destructor and from the session. The second call
 // deletes a null model and clears an empty vector.
-void MemoryService::finish() {
+void MemoryService::finish(int) {
   if (current_service == this) {
     current_service = nullptr;
   }
@@ -191,6 +204,8 @@ void MemoryService::finish() {
   delete static_cast<CoDRAMsim3*>(dram_);
 #endif
   dram_ = nullptr;
+  held_.clear();
+  ready_.clear();
   words_.clear();
 }
 
@@ -255,20 +270,16 @@ struct DramMeta {
 // until take_response() deletes it. Return 0 when the queue will not take it.
 unsigned char MemoryService::accept(uint64_t offset, unsigned int id,
                                     unsigned char is_write) {
-#ifndef WITH_DRAMSIM3
-  (void)offset;
-  (void)id;
-  (void)is_write;
-  return 0;
-#else
-  if (dram_ == nullptr) {
-    return 0;
-  }
   uint64_t index = 0;
   if (!word_index(offset, &index)) {
     std::fprintf(stderr, "memory request out of range: offset 0x%" PRIx64 "\n",
                  offset);
     failed_ = true;
+    return 0;
+  }
+
+#ifdef WITH_DRAMSIM3
+  if (dram_ == nullptr) {
     return 0;
   }
   auto* dram = static_cast<CoDRAMsim3*>(dram_);
@@ -287,16 +298,21 @@ unsigned char MemoryService::accept(uint64_t offset, unsigned int id,
     return 0;
   }
   return 1;
+#else
+  // Remember the id. The data stays in words_, and the response waits until
+  // on_posedge() publishes this cycle's accepts.
+  PlainResponse response;
+  response.id = id;
+  response.is_write = is_write;
+  held_.push_back(response);
+  return 1;
 #endif
 }
 
 // Return id with bit 32 set, so id 0 is still distinct from "no response".
 // Read responses also print how many DRAMSim3 cycles the access took.
 uint64_t MemoryService::take_response(unsigned char is_write) {
-#ifndef WITH_DRAMSIM3
-  (void)is_write;
-  return 0;
-#else
+#ifdef WITH_DRAMSIM3
   if (dram_ == nullptr) {
     return 0;
   }
@@ -316,6 +332,17 @@ uint64_t MemoryService::take_response(unsigned char is_write) {
   delete response->req;
   delete response;
   return value;
+#else
+  for (std::vector<PlainResponse>::iterator it = ready_.begin();
+       it != ready_.end(); ++it) {
+    if (it->is_write != is_write) {
+      continue;
+    }
+    uint64_t value = static_cast<uint64_t>(it->id) | (1ull << 32);
+    ready_.erase(it);
+    return value;
+  }
+  return 0;
 #endif
 }
 

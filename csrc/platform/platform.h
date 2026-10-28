@@ -17,6 +17,8 @@ class Platform {
   virtual void waveform_dump(uint64_t time) = 0;
   virtual void close_waveform() = 0;
   virtual void set_assertions_enabled(bool enabled) = 0;
+  // Verilator drops every thread except the one that called fork().
+  virtual void at_clone() = 0;
 };
 
 std::unique_ptr<Platform> create_platform(int argc, char** argv, uint32_t seed);

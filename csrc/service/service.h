@@ -23,6 +23,11 @@ struct SimArgsView {
 struct SimContext {
   uint64_t cycle;
   const SimArgsView *args;
+  // A service sets this after fork() resumes the checkpoint process.
+  bool clone_requested;
+  // The resumed checkpoint wants a waveform from the next cycle. -b/-e do
+  // not apply to that recording.
+  bool waveform_requested;
 };
 
 class OptionSet;
@@ -35,10 +40,13 @@ class SimService {
   // Return false to stop before the main loop.
   virtual bool init(const SimContext &) { return true; }
   // After the rising eval, before the falling edge. Return STATE_RUNNING or a
-  // trap.
-  virtual int on_posedge(const SimContext &) { return STATE_RUNNING; }
+  // trap. context is mutable so a service can request at_clone().
+  virtual int on_posedge(SimContext &) { return STATE_RUNNING; }
   virtual void at_clone() {}
-  virtual void finish() {}
+  // Parent must not open a waveform. The resumed checkpoint asks for one.
+  virtual bool defer_waveform() const { return false; }
+  // trap is the reason the main loop stopped.
+  virtual void finish(int) {}
 };
 
 #endif
