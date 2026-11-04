@@ -74,11 +74,9 @@ struct LightsssShare : ShareBody {};
 
 LightsssService::LightsssService()
     : enabled_(false),
-      fail_enabled_(false),
       is_child_(false),
       have_forked_(false),
       interval_ms_(kDefaultIntervalMs),
-      fail_cycle_(0),
       last_cycle_(0),
       last_fork_ms_(0),
       share_(nullptr) {}
@@ -109,36 +107,20 @@ bool LightsssService::apply_interval(void* context, const char* value) {
   return true;
 }
 
-bool LightsssService::apply_fail_at(void* context, const char* value) {
-  auto* service = static_cast<LightsssService*>(context);
-  uint64_t cycle = 0;
-  if (!parse_u64(value, "fork-fail-at", &cycle)) {
-    return false;
-  }
-  service->fail_enabled_ = true;
-  service->fail_cycle_ = cycle;
-  return true;
-}
-
 void LightsssService::register_options(OptionSet& options) {
   options.add_flag("fork", &enabled_, "fork LightSSS checkpoints");
   options.add_value("fork-interval", &LightsssService::apply_interval, this,
                     "seconds between checkpoints (default 10)");
-  options.add_value("fork-fail-at", &LightsssService::apply_fail_at, this,
-                    "parent-only abort cycle, used to test a checkpoint");
 }
 
 bool LightsssService::init(const SimContext&) {
-  if (!enabled_ && !fail_enabled_) {
+  if (!enabled_) {
     return true;
   }
   // Line-buffer even when stdout is redirected, so a fork does not duplicate
   // text that the parent has already printed.
   std::setvbuf(stdout, nullptr, _IOLBF, 0);
   flush_stdio();
-  if (!enabled_) {
-    return true;
-  }
   void* memory = mmap(nullptr, sizeof(LightsssShare), PROT_READ | PROT_WRITE,
                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
   if (memory == MAP_FAILED) {
@@ -157,21 +139,7 @@ bool LightsssService::init(const SimContext&) {
   return true;
 }
 
-int LightsssService::child_cycle(const SimContext& context) {
-  uint64_t end = share_->end_cycle.load(std::memory_order_relaxed);
-  if (context.cycle == end) {
-    std::printf("LightSSS reached abort cycle %" PRIu64 "\n", end);
-    flush_stdio();
-  }
-  if (context.cycle == end + kStepForward) {
-    std::printf("LightSSS step forward done at cycle %" PRIu64 "\n",
-                context.cycle);
-    flush_stdio();
-    return STATE_ABORT;
-  }
-  return STATE_RUNNING;
-}
-
+// 进行快照的复制
 bool LightsssService::spawn(SimContext& context) {
   while (static_cast<int>(slots_.size()) >= kSlotCount) {
     int oldest = slots_.back();
@@ -216,17 +184,13 @@ bool LightsssService::spawn(SimContext& context) {
   return true;
 }
 
+// 不停的进行快照的复制
 int LightsssService::on_posedge(SimContext& context) {
+  if (!enabled_) {
+    return STATE_RUNNING;
+  }
   last_cycle_ = context.cycle;
   if (is_child_) {
-    return child_cycle(context);
-  }
-  if (fail_enabled_ && context.cycle == fail_cycle_) {
-    std::printf("LightSSS inject abort at cycle %" PRIu64 "\n", context.cycle);
-    flush_stdio();
-    return STATE_ABORT;
-  }
-  if (!enabled_ || share_ == nullptr) {
     return STATE_RUNNING;
   }
   uint64_t now = now_ms();
@@ -242,7 +206,7 @@ int LightsssService::on_posedge(SimContext& context) {
 }
 
 void LightsssService::wakeup(uint64_t cycle) {
-  if (share_ == nullptr || slots_.empty()) {
+  if (slots_.empty()) {
     return;
   }
   int oldest = slots_.back();
@@ -274,7 +238,7 @@ void LightsssService::clear_children() {
 }
 
 void LightsssService::finish(int trap) {
-  if (!enabled_ || is_child_ || share_ == nullptr) {
+  if (!enabled_ || is_child_) {
     return;
   }
   if (trap == STATE_ABORT) {

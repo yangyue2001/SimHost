@@ -39,6 +39,9 @@ class MemoryService : public SimService {
 
   // Map an 8-byte-aligned byte offset into words_. Offset 0 is the first word.
   bool word_index(uint64_t offset, uint64_t* index) const;
+  // True when every byte of [offset, offset + len) is inside the RAM.
+  // A zero length is not covered. This does not report a fault.
+  bool covers(uint64_t offset, uint64_t len) const;
   // Update the functional RAM now. strobe bit N enables byte N.
   void write_word(uint64_t offset, uint64_t data, unsigned char strobe);
   // Read one aligned word from the functional RAM.
@@ -51,6 +54,9 @@ class MemoryService : public SimService {
   // Pop one finished response. Bit 32 means valid and bits [31:0] are the id.
   // Zero means there is no response. The payload is not included.
   uint64_t take_response(unsigned char is_write);
+  // Path given by --image. Empty when the option was absent. Difftest uses
+  // this same file as its reference program.
+  const char* image_path() const { return image_.c_str(); }
 
  private:
   // OptionSet stores a C function pointer, so these are static and receive
@@ -58,10 +64,15 @@ class MemoryService : public SimService {
   static bool apply_ram_size(void* context, const char* value);
   static bool apply_ini(void* context, const char* value);
   static bool apply_outdir(void* context, const char* value);
+  static bool apply_image(void* context, const char* value);
+  bool load_image();
 
   // Empty unless the matching option was given. init() then uses its default.
   std::string ini_;
   std::string outdir_;
+  // ELF physical addresses are converted with base 0x80000000. Raw files
+  // are copied to offset 0. Empty means the RAM stays zero.
+  std::string image_;
   uint64_t ram_bytes_;
   // Functional data, one element per 8 bytes. Empty until init().
   std::vector<uint64_t> words_;
@@ -82,5 +93,8 @@ class MemoryService : public SimService {
   // Sticky out-of-range access. The next on_posedge() returns STATE_ABORT.
   bool failed_;
 };
+
+// Valid after MemoryService::init(). Empty when --image was not given.
+const char* memory_image_path();
 
 #endif

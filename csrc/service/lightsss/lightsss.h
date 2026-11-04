@@ -27,19 +27,15 @@ class LightsssService : public SimService {
 
  private:
   static bool apply_interval(void* context, const char* value);
-  static bool apply_fail_at(void* context, const char* value);
 
   bool spawn(SimContext& context);
-  int child_cycle(const SimContext& context);
   void wakeup(uint64_t cycle);
   void clear_children();
 
   bool enabled_;
-  bool fail_enabled_;
   bool is_child_;
   bool have_forked_;
   uint64_t interval_ms_;
-  uint64_t fail_cycle_;
   uint64_t last_cycle_;
   uint64_t last_fork_ms_;
   LightsssShare* share_;

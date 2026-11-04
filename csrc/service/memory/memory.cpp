@@ -1,5 +1,6 @@
 #include "service/memory/memory.h"
 
+#include <elf.h>
 #include <sys/stat.h>
 
 #include <cerrno>
@@ -8,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "session/options.h"
 
@@ -20,6 +22,8 @@ namespace {
 
 // Offsets that are not 8-byte aligned, or that fall past words_, are rejected.
 constexpr uint64_t kDefaultRamBytes = 256ull << 20;
+// ELF p_paddr is a guest physical address. Offset 0 in words_ is this base.
+constexpr uint64_t kImageBase = 0x80000000ull;
 
 // DPI entry points are free functions, so they find the active service here.
 // init() publishes it and finish() clears it. A second service is refused.
@@ -63,6 +67,113 @@ bool parse_ram_size(const char* text, uint64_t* out) {
     return false;
   }
   *out = bytes;
+  return true;
+}
+
+bool host_little_endian() {
+  uint16_t probe = 1;
+  return *reinterpret_cast<uint8_t*>(&probe) == 1;
+}
+
+bool read_file(const char* path, std::vector<uint8_t>* out) {
+  FILE* file = std::fopen(path, "rb");
+  if (file == nullptr) {
+    std::fprintf(stderr, "cannot open image %s\n", path);
+    return false;
+  }
+  if (std::fseek(file, 0, SEEK_END) != 0) {
+    std::fclose(file);
+    std::fprintf(stderr, "cannot size image %s\n", path);
+    return false;
+  }
+  long size = std::ftell(file);
+  if (size < 0 || std::fseek(file, 0, SEEK_SET) != 0) {
+    std::fclose(file);
+    std::fprintf(stderr, "cannot size image %s\n", path);
+    return false;
+  }
+  out->resize(static_cast<size_t>(size));
+  size_t got = 0;
+  if (size > 0) {
+    got = std::fread(out->data(), 1, out->size(), file);
+  }
+  std::fclose(file);
+  if (got != out->size()) {
+    std::fprintf(stderr, "cannot read image %s\n", path);
+    return false;
+  }
+  return true;
+}
+
+// Byte 0 of the guest word is bits [7:0]. The host must be little-endian so
+// a uint64_t in words_ has that layout.
+bool install_span(std::vector<uint64_t>* words, uint64_t offset,
+                  const uint8_t* src, uint64_t filesz, uint64_t memsz) {
+  if (memsz < filesz) {
+    return false;
+  }
+  uint64_t bytes = static_cast<uint64_t>(words->size()) * 8ull;
+  if (offset > bytes || memsz > bytes - offset) {
+    std::fprintf(stderr, "image does not fit functional RAM\n");
+    return false;
+  }
+  uint8_t* dst = reinterpret_cast<uint8_t*>(words->data()) + offset;
+  if (filesz != 0) {
+    std::memcpy(dst, src, static_cast<size_t>(filesz));
+  }
+  if (memsz > filesz) {
+    std::memset(dst + filesz, 0, static_cast<size_t>(memsz - filesz));
+  }
+  return true;
+}
+
+bool file_range(size_t size, uint64_t offset, uint64_t length) {
+  return offset <= size && length <= size - offset;
+}
+
+bool load_elf(const std::vector<uint8_t>& file, std::vector<uint64_t>* words) {
+  if (file.size() < sizeof(Elf64_Ehdr)) {
+    std::fprintf(stderr, "truncated ELF header\n");
+    return false;
+  }
+  Elf64_Ehdr eh;
+  std::memcpy(&eh, file.data(), sizeof(eh));
+  if (eh.e_ident[EI_CLASS] != ELFCLASS64 ||
+      eh.e_ident[EI_DATA] != ELFDATA2LSB || eh.e_machine != EM_RISCV ||
+      eh.e_phnum == 0 || eh.e_phentsize < sizeof(Elf64_Phdr) ||
+      !file_range(file.size(), eh.e_phoff,
+                  static_cast<uint64_t>(eh.e_phnum) * eh.e_phentsize)) {
+    std::fprintf(stderr, "unsupported RV64 ELF image\n");
+    return false;
+  }
+  bool any = false;
+  for (unsigned index = 0; index < eh.e_phnum; ++index) {
+    Elf64_Phdr ph;
+    std::memcpy(&ph, file.data() + eh.e_phoff + index * eh.e_phentsize,
+                sizeof(ph));
+    if (ph.p_type != PT_LOAD || ph.p_memsz == 0) {
+      continue;
+    }
+    if (ph.p_filesz > ph.p_memsz ||
+        !file_range(file.size(), ph.p_offset, ph.p_filesz)) {
+      std::fprintf(stderr, "ELF segment %u is outside the file\n", index);
+      return false;
+    }
+    if (ph.p_paddr < kImageBase) {
+      std::fprintf(stderr, "ELF segment %u is below RAM base\n", index);
+      return false;
+    }
+    const uint8_t* src = file.data() + ph.p_offset;
+    if (!install_span(words, ph.p_paddr - kImageBase, src, ph.p_filesz,
+                      ph.p_memsz)) {
+      return false;
+    }
+    any = true;
+  }
+  if (!any) {
+    std::fprintf(stderr, "ELF image has no loadable segment\n");
+    return false;
+  }
   return true;
 }
 
@@ -122,11 +233,58 @@ bool MemoryService::apply_outdir(void* context, const char* value) {
 #endif
 }
 
+bool MemoryService::apply_image(void* context, const char* value) {
+  auto* service = static_cast<MemoryService*>(context);
+  if (value == nullptr || value[0] == '\0') {
+    std::fprintf(stderr, "--image needs a path\n");
+    return false;
+  }
+  service->image_ = value;
+  return true;
+}
+
+// Copy --image into words_. Called after the vector exists and before the
+// service is published, so a bad file never becomes the active RAM.
+bool MemoryService::load_image() {
+  if (image_.empty()) {
+    return true;
+  }
+  if (!host_little_endian()) {
+    std::fprintf(stderr, "image loader expects a little-endian host\n");
+    return false;
+  }
+  std::vector<uint8_t> file;
+  if (!read_file(image_.c_str(), &file)) {
+    return false;
+  }
+  bool elf = file.size() >= 4 && file[0] == 0x7f && file[1] == 'E' &&
+             file[2] == 'L' && file[3] == 'F';
+  if (elf) {
+    if (!load_elf(file, &words_)) {
+      return false;
+    }
+  } else if (!install_span(&words_, 0, file.data(), file.size(), file.size())) {
+    return false;
+  }
+  std::printf("functional RAM image: %s\n", image_.c_str());
+  return true;
+}
+
+/* 不一定需要*/
+const char* memory_image_path() {
+  if (current_service == nullptr) {
+    return "";
+  }
+  return current_service->image_path();
+}
+
 // The session does not know these names. They become --ram-size and the two
 // DRAMSim3 long options. A smoke build rejects the DRAMSim3 options here.
 void MemoryService::register_options(OptionSet& options) {
   options.add_value("ram-size", &MemoryService::apply_ram_size, this,
                     "functional RAM size, for example 256MB");
+  options.add_value("image", &MemoryService::apply_image, this,
+                    "ELF or raw binary; Difftest checks this same file");
   options.add_value("dramsim3-ini", &MemoryService::apply_ini, this,
                     "DRAMSim3 ini file; requires the dram build");
   options.add_value("dramsim3-outdir", &MemoryService::apply_outdir, this,
@@ -136,20 +294,7 @@ void MemoryService::register_options(OptionSet& options) {
 bool MemoryService::init(const SimContext&) {
   // The functional RAM exists in every build. DRAMSim3 is only the timing
   // backend, and only when this binary was built with it.
-  if (current_service != nullptr) {
-    std::fprintf(stderr, "only one memory service is supported\n");
-    return false;
-  }
-#ifndef WITH_DRAMSIM3
-  if (ram_bytes_ / 8 == 0) {
-    std::fprintf(stderr, "--ram-size is too small\n");
-    return false;
-  }
-  words_.assign(static_cast<size_t>(ram_bytes_ / 8), 0);
-  current_service = this;
-  std::printf("functional RAM: %" PRIu64 " bytes\n", ram_bytes_);
-  return true;
-#else
+#ifdef WITH_DRAMSIM3
   // Both the functional RAM and the timing model are created before the loop.
   const char* config = ini_.empty() ? DRAMSIM3_CONFIG : ini_.c_str();
   const char* outdir = outdir_.empty() ? DRAMSIM3_OUTDIR : outdir_.c_str();
@@ -162,17 +307,22 @@ bool MemoryService::init(const SimContext&) {
   if (!make_directory(outdir)) {
     return false;
   }
+  dram_ = new ComplexCoDRAMsim3(config, outdir);
+  std::printf("DRAMSim3 config: %s\n", config);
+  std::printf("DRAMSim3 outdir: %s\n", outdir);
+#endif
   if (ram_bytes_ / 8 == 0) {
     std::fprintf(stderr, "--ram-size is too small\n");
     return false;
   }
   words_.assign(static_cast<size_t>(ram_bytes_ / 8), 0);
-  dram_ = new ComplexCoDRAMsim3(config, outdir);
+  if (!load_image()) {
+    words_.clear();
+    return false;
+  }
   current_service = this;
-  std::printf("DRAMSim3 config: %s\n", config);
-  std::printf("DRAMSim3 outdir: %s\n", outdir);
+  std::printf("functional RAM: %" PRIu64 " bytes\n", ram_bytes_);
   return true;
-#endif
 }
 
 int MemoryService::on_posedge(SimContext&) {
@@ -223,6 +373,14 @@ bool MemoryService::word_index(uint64_t offset, uint64_t* index) const {
   return true;
 }
 
+// 给理想mmu用的 不一定有必要
+bool MemoryService::covers(uint64_t offset, uint64_t len) const {
+  if (len == 0 || ram_bytes_ == 0 || offset >= ram_bytes_) {
+    return false;
+  }
+  return len <= ram_bytes_ - offset;
+}
+
 // Merge selected bytes into the old word. A zero strobe bit keeps that byte.
 // This updates functional data at request time, not when the response returns.
 void MemoryService::write_word(uint64_t offset, uint64_t data,
@@ -252,7 +410,16 @@ uint64_t MemoryService::read_word(uint64_t offset) {
     failed_ = true;
     return 0;
   }
-  return words_[static_cast<size_t>(index)];
+  uint64_t data = words_[static_cast<size_t>(index)];
+  if (offset >= 0xefc0ull && offset < 0xf040ull) {
+    static int logs = 0;
+    if (logs < 16) {
+      std::fprintf(stderr, "MEMREAD off=%" PRIx64 " data=%016" PRIx64 "\n",
+                   offset, data);
+      logs++;
+    }
+  }
+  return data;
 }
 
 namespace {
@@ -271,6 +438,14 @@ struct DramMeta {
 unsigned char MemoryService::accept(uint64_t offset, unsigned int id,
                                     unsigned char is_write) {
   uint64_t index = 0;
+  if (offset >= 0xefc0ull && offset < 0xf080ull) {
+    static int logs = 0;
+    if (logs < 8) {
+      std::fprintf(stderr, "MEMREQ off=%" PRIx64 " id=%u wr=%u\n", offset, id,
+                   is_write);
+      logs++;
+    }
+  }
   if (!word_index(offset, &index)) {
     std::fprintf(stderr, "memory request out of range: offset 0x%" PRIx64 "\n",
                  offset);
@@ -350,30 +525,22 @@ uint64_t MemoryService::take_response(unsigned char is_write) {
 // service published by init(). Names stay unmangled for DPI-C.
 extern "C" unsigned char memory_request(uint64_t offset, unsigned int id,
                                         unsigned char is_write) {
-  if (current_service == nullptr) {
-    return 0;
-  }
   return current_service->accept(offset, id, is_write);
 }
 
 extern "C" void memory_write(uint64_t offset, uint64_t data,
                              unsigned char strobe) {
-  if (current_service == nullptr) {
-    return;
-  }
   current_service->write_word(offset, data, strobe);
 }
 
 extern "C" uint64_t memory_read(uint64_t offset) {
-  if (current_service == nullptr) {
-    return 0;
-  }
   return current_service->read_word(offset);
 }
 
+extern "C" unsigned char memory_covers(uint64_t offset, uint64_t len) {
+  return current_service->covers(offset, len) ? 1 : 0;
+}
+
 extern "C" uint64_t memory_response(unsigned char is_write) {
-  if (current_service == nullptr) {
-    return 0;
-  }
   return current_service->take_response(is_write);
 }
