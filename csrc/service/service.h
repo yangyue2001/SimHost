@@ -40,11 +40,8 @@ class SimService {
   // Return false to stop before the main loop.
   virtual bool init(const SimContext&) { return true; }
   // After the rising eval, before the falling edge. Return STATE_RUNNING or a
-  // trap. context is mutable so a service can request at_clone().
+  // trap. A service may set clone_requested or waveform_requested.
   virtual int on_posedge(SimContext&) { return STATE_RUNNING; }
-  virtual void at_clone() {}
-  // Parent must not open a waveform. The resumed checkpoint asks for one.
-  virtual bool defer_waveform() const { return false; }
   // trap is the reason the main loop stopped.
   virtual void finish(int) {}
 };

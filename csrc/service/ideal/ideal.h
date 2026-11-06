@@ -4,8 +4,6 @@
 #include <cstdint>
 
 #include "service/ideal/exec.h"
-#include "service/service.h"
-
 // One instruction, executed in the DPI call. pc is the instruction address.
 // page_fault and access_fault are fetch faults. A pc other than the
 // architectural pc does not execute. ideal_backend_resp then publishes the
@@ -15,7 +13,7 @@
 // fields describe that one access. RAM leaves them 0.
 //
 // There is no queue and no on_posedge work. Data accesses are translated by
-// IdealMmu before they reach RAM or a device window. A byte store to
+// Mmu before they reach RAM or a device window. A byte store to
 // 0x10000000 prints. CLINT and PLIC reads are zero. A pending, enabled
 // interrupt is taken before the instruction. Verilog exports
 // ideal_backend_resp; the weak definition is empty.
@@ -107,15 +105,12 @@ extern "C" void ideal_backend_inst(uint64_t pc, unsigned int inst,
                                    unsigned char page_fault,
                                    unsigned char access_fault);
 
-// Software RV64GC hart. Verilog calls ideal_backend_inst during eval.
-class IdealBackend : public SimService {
+// One RV64GC hart. Built only when --ideal is set. Verilog then calls
+// ideal_backend_inst during eval. It is not a simulation service.
+class Ideal {
  public:
-  IdealBackend();
-  ~IdealBackend() override;
-
-  const char* name() const override;
-  bool init(const SimContext& context) override;
-  void finish(int trap) override;
+  Ideal();
+  ~Ideal();
 
   void step(uint64_t pc, uint32_t inst, unsigned char page_fault,
             unsigned char access_fault);
@@ -123,6 +118,8 @@ class IdealBackend : public SimService {
 
  private:
   void reset();
+  bool decode(IdealContext* ctx, uint32_t raw, IdealDecoded* decoded);
+  int execute(IdealContext* ctx, const IdealDecoded& decoded);
   void publish(unsigned char branch, unsigned char taken, uint64_t target,
                const IdealMmio& mmio) const;
 
@@ -130,7 +127,10 @@ class IdealBackend : public SimService {
   uint64_t executed_;
 };
 
+void ideal_open();
+void ideal_close();
+
 #endif
 
-// The hart currently published by IdealBackend::init. Null before init.
+// The hart built by ideal_open(). Null until --ideal.
 IdealHart* ideal_hart();

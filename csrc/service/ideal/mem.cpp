@@ -126,13 +126,6 @@ extern "C" void memory_write(uint64_t offset, uint64_t data,
                              unsigned char strobe);
 extern "C" unsigned char memory_covers(uint64_t offset, uint64_t len);
 
-unsigned effective_priv(const IdealHart* hart, bool data) {
-  if (data && (hart->mstatus & kMstatusMprv) != 0) {
-    return static_cast<unsigned>((hart->mstatus >> 11) & 3u);
-  }
-  return hart->priv;
-}
-
 void fill_req(const IdealHart* hart, uint64_t addr, unsigned size, bool store,
               bool data, MmuReq* req) {
   uint64_t cfg0 = 0;
@@ -141,14 +134,10 @@ void fill_req(const IdealHart* hart, uint64_t addr, unsigned size, bool store,
     cfg0 |= static_cast<uint64_t>(hart->pmpcfg[i]) << (8u * i);
     cfg2 |= static_cast<uint64_t>(hart->pmpcfg[8u + i]) << (8u * i);
   }
-  req->priv = static_cast<unsigned char>(effective_priv(hart, data));
-  req->va_hi = static_cast<unsigned>((addr >> 57) & 0x7fu);
-  req->vpn4 = static_cast<unsigned>((addr >> 48) & 0x1ffu);
-  req->vpn3 = static_cast<unsigned>((addr >> 39) & 0x1ffu);
-  req->vpn2 = static_cast<unsigned>((addr >> 30) & 0x1ffu);
-  req->vpn1 = static_cast<unsigned>((addr >> 21) & 0x1ffu);
-  req->vpn0 = static_cast<unsigned>((addr >> 12) & 0x1ffu);
-  req->page_off = static_cast<unsigned>(addr & 0xfffu);
+  req->priv = hart->priv;
+  req->mpp = static_cast<unsigned char>((hart->mstatus >> 11) & 3u);
+  req->mprv = (hart->mstatus & kMstatusMprv) != 0 ? 1 : 0;
+  req->vaddr = addr;
   req->len = size;
   req->satp = hart->satp;
   req->sum = (hart->mstatus & kMstatusSum) != 0 ? 1 : 0;
@@ -175,10 +164,7 @@ bool translate(const IdealHart* hart, uint64_t addr, unsigned size, bool store,
   MmuReq req{};
   fill_req(hart, addr, size, store, data, &req);
   MmuResp resp{};
-  if (!mmu_translate(req, &resp)) {
-    *access_fault = true;
-    return false;
-  }
+  mmu_translate(req, &resp);
   if (resp.page_fault != 0) {
     *page_fault = true;
     return false;

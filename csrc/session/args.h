@@ -16,6 +16,7 @@ struct SessionArgs {
   bool dump_wave = false;
   bool dump_wave_full = false;
   bool enable_assert = true;
+  bool ideal = false;
   std::string wave_path;
 };
 

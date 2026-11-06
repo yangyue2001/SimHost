@@ -1,6 +1,9 @@
 #include "service/ideal/ideal.h"
 
+#include "service/service.h"
+
 #include <cinttypes>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 
@@ -10,7 +13,7 @@ namespace {
 
 constexpr uint64_t kResetPc = 0x80000000ull;
 
-IdealBackend* current_backend = nullptr;
+Ideal* current = nullptr;
 
 void emit(const IdealHart& hart, unsigned char branch, unsigned char taken,
           uint64_t target, const IdealMmio& mmio) {
@@ -43,13 +46,19 @@ void emit(const IdealHart& hart, unsigned char branch, unsigned char taken,
 
 }  // namespace
 
-IdealBackend::IdealBackend() : executed_(0) { reset(); }
+Ideal::Ideal() : executed_(0) { reset(); }
 
-IdealBackend::~IdealBackend() { finish(STATE_RUNNING); }
+Ideal::~Ideal() {
+  if (current == this) {
+    if (executed_ != 0) {
+      std::printf("ideal executed %" PRIu64 " instructions, pc %016" PRIx64 "\n",
+                  executed_, hart_.pc);
+    }
+    current = nullptr;
+  }
+}
 
-const char* IdealBackend::name() const { return "ideal"; }
-
-void IdealBackend::reset() {
+void Ideal::reset() {
   std::memset(&hart_, 0, sizeof(hart_));
   hart_.pc = kResetPc;
   hart_.priv = 3;
@@ -59,34 +68,29 @@ void IdealBackend::reset() {
   ideal_uart_reset();
 }
 
-bool IdealBackend::init(const SimContext&) {
-  if (current_backend != nullptr) {
-    std::fprintf(stderr, "only one ideal backend is supported\n");
+bool Ideal::decode(IdealContext* ctx, uint32_t raw, IdealDecoded* decoded) {
+  uint32_t widened = 0;
+  int len = ideal_widen(raw, &widened);
+  if (len == 0 || !ideal_decode(widened, decoded) || decoded->exec == nullptr) {
     return false;
   }
-  reset();
-  ideal_decode_init();
-  current_backend = this;
+  ctx->len = static_cast<unsigned>(len);
+  ctx->inst = widened;
+  ctx->npc = hart_.pc + static_cast<unsigned>(len);
+  ctx->operands = decoded->operands;
   return true;
 }
 
-void IdealBackend::finish(int) {
-  if (current_backend == this) {
-    if (executed_ != 0) {
-      std::printf("ideal backend executed %" PRIu64 " instructions, pc %016" PRIx64
-                  "\n",
-                  executed_, hart_.pc);
-    }
-    current_backend = nullptr;
-  }
+int Ideal::execute(IdealContext* ctx, const IdealDecoded& decoded) {
+  return decoded.exec(ctx);
 }
 
-void IdealBackend::publish(unsigned char branch, unsigned char taken,
+void Ideal::publish(unsigned char branch, unsigned char taken,
                            uint64_t target, const IdealMmio& mmio) const {
   emit(hart_, branch, taken, target, mmio);
 }
 
-void IdealBackend::step(uint64_t pc, uint32_t inst, unsigned char page_fault,
+void Ideal::step(uint64_t pc, uint32_t inst, unsigned char page_fault,
                         unsigned char access_fault) {
   // A wrong-path fetch is not this instruction. Leave the hart alone.
   static uint64_t hist_pc[8];
@@ -152,26 +156,13 @@ void IdealBackend::step(uint64_t pc, uint32_t inst, unsigned char page_fault,
   } else if ((pc & 1ull) != 0) {
     ideal_raise(&ctx, kExcInstMisaligned, pc);
   } else {
-    uint32_t widened = 0;
-    int len = ideal_widen(inst, &widened);
-    if (len == 0) {
+    IdealDecoded decoded;
+    if (!decode(&ctx, inst, &decoded)) {
       ideal_raise(&ctx, kExcIllegal, inst);
-    } else {
-      ctx.len = static_cast<unsigned>(len);
-      ctx.inst = widened;
-      ctx.npc = pc + static_cast<unsigned>(len);
-      IdealDecoded decoded;
-      if (!ideal_decode(widened, &decoded) || decoded.exec == nullptr) {
-        ideal_raise(&ctx, kExcIllegal, inst);
-      } else {
-        ctx.operands = decoded.operands;
-        int status = decoded.exec(&ctx);
-        if (status != STATE_RUNNING) {
-          ideal_fix_sd(&hart_);
-          publish(0, 0, 0, ctx.mmio);
-          return;
-        }
-      }
+    } else if (execute(&ctx, decoded) != STATE_RUNNING) {
+      ideal_fix_sd(&hart_);
+      publish(0, 0, 0, ctx.mmio);
+      return;
     }
   }
 
@@ -194,18 +185,32 @@ void IdealBackend::step(uint64_t pc, uint32_t inst, unsigned char page_fault,
   publish(branch, taken, target, ctx.mmio);
 }
 
-IdealHart* IdealBackend::hart() { return &hart_; }
+IdealHart* Ideal::hart() { return &hart_; }
 
 IdealHart* ideal_hart() {
-  return current_backend == nullptr ? nullptr : current_backend->hart();
+  return current == nullptr ? nullptr : current->hart();
+}
+
+void ideal_open() {
+  if (current != nullptr) {
+    std::fprintf(stderr, "ideal backend is already open\n");
+    std::abort();
+  }
+  current = new Ideal();
+  ideal_decode_init();
+}
+
+void ideal_close() {
+  delete current;
+  current = nullptr;
 }
 
 extern "C" void ideal_backend_inst(uint64_t pc, unsigned int inst,
                                    unsigned char page_fault,
                                    unsigned char access_fault) {
-  if (current_backend == nullptr) {
+  if (current == nullptr) {
     emit(IdealHart{}, 0, 0, 0, IdealMmio{});
     return;
   }
-  current_backend->step(pc, inst, page_fault, access_fault);
+  current->step(pc, inst, page_fault, access_fault);
 }

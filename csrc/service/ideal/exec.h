@@ -137,7 +137,7 @@ uint64_t ideal_pending_interrupt(const IdealHart* hart);
 // CSR ops. op 0 writes, 1 sets, 2 clears. imm selects the 5-bit zimm.
 int ideal_csr(IdealContext* ctx, int op, bool imm);
 
-// Data access. The effective address is translated by IdealMmu, then the
+// Data access. The effective address is translated by Mmu, then the
 // physical address hits UART, the zero CLINT/PLIC windows, or RAM.
 // False means the access trapped and the destination must not be written.
 bool ideal_load_data(IdealContext* ctx, uint64_t addr, unsigned size,

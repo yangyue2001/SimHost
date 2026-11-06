@@ -41,7 +41,6 @@ class MemoryService : public SimService {
   bool word_index(uint64_t offset, uint64_t* index) const;
   // True when every byte of [offset, offset + len) is inside the RAM.
   // A zero length is not covered. This does not report a fault.
-  bool covers(uint64_t offset, uint64_t len) const;
   // Update the functional RAM now. strobe bit N enables byte N.
   void write_word(uint64_t offset, uint64_t data, unsigned char strobe);
   // Read one aligned word from the functional RAM.
@@ -54,9 +53,9 @@ class MemoryService : public SimService {
   // Pop one finished response. Bit 32 means valid and bits [31:0] are the id.
   // Zero means there is no response. The payload is not included.
   uint64_t take_response(unsigned char is_write);
-  // Path given by --image. Empty when the option was absent. Difftest uses
-  // this same file as its reference program.
-  const char* image_path() const { return image_.c_str(); }
+  uint64_t ram_bytes() const { return ram_bytes_; }
+  // Host bytes of words_. nullptr until init(). ram_bytes() is the length.
+  uint8_t* ram_data();
 
  private:
   // OptionSet stores a C function pointer, so these are static and receive
@@ -94,7 +93,12 @@ class MemoryService : public SimService {
   bool failed_;
 };
 
-// Valid after MemoryService::init(). Empty when --image was not given.
-const char* memory_image_path();
+// Byte 0 of functional RAM is this guest physical address.
+constexpr uint64_t kFunctionalRamBase = 0x80000000ull;
+
+// Valid after MemoryService::init(). The pointer is nullptr and the length
+// is 0 when the service is not published.
+uint8_t* memory_ram_data();
+uint64_t memory_ram_bytes();
 
 #endif

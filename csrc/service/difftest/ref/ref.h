@@ -1,11 +1,13 @@
 #ifndef SIM_SERVICE_DIFFTEST_REF_H
 #define SIM_SERVICE_DIFFTEST_REF_H
 
+#include <difftest.h>
+
+#include <cstddef>
 #include <cstdint>
 
-#include "service/difftest/ref/ref_abi.h"
-
-// One dlopen'd reference model. The session never sees the file name.
+// One dlopen'd reference model. The library owns the CPU and its RAM.
+// direction is DIFFTEST_TO_DUT (read from the reference) or DIFFTEST_TO_REF.
 class RefLibrary {
  public:
   RefLibrary();
@@ -14,29 +16,25 @@ class RefLibrary {
   RefLibrary(const RefLibrary&) = delete;
   RefLibrary& operator=(const RefLibrary&) = delete;
 
-  // dlopen path, check the ABI, and call difftest_init. Prints the reason
-  // and returns false when the file or a required symbol is missing.
+  // dlopen path and call difftest_init. RvissRefState comes from difftest.h.
   bool open(const char* path);
   void close();
   bool opened() const { return handle_ != nullptr; }
 
-  // Copy --image into the reference RAM with difftest_memcpy.
-  // No image leaves the reference at the state from difftest_init.
-  bool load_image();
-  void regcpy(RvissRefState* state, int direction);
+  // direction is DIFFTEST_TO_DUT or DIFFTEST_TO_REF. The ref ABI uses bool.
+  void memcpy(uint64_t addr, void* buf, size_t n, bool direction);
+  void regcpy(RvissRefState* state, bool direction);
   void exec(uint64_t n);
+  // cause is mcause. Bit 63 set is an interrupt; clear is a synchronous
+  // exception. The cause code itself must be below 64.
   void raise_trap(uint64_t cause, uint64_t tval);
 
  private:
   void* handle_;
-  void (*init_)(void);
-  void (*memcpy_)(uint64_t, void*, size_t, int);
-  void (*regcpy_)(void*, int);
+  void (*memcpy_)(uint64_t, void*, size_t, bool);
+  void (*regcpy_)(void*, bool);
   void (*exec_)(uint64_t);
   void (*raise_trap_)(uint64_t, uint64_t);
-  uint64_t (*state_size_)(void);
-  uint64_t (*ram_base_)(void);
-  uint64_t (*ram_size_)(void);
 };
 
 #endif

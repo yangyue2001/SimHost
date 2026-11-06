@@ -20,6 +20,7 @@ enum {
   OPT_WAVE_PATH,
   OPT_ASSERT,
   OPT_NO_ASSERT,
+  OPT_IDEAL,
   OPT_SERVICE_BASE = 2000,
 };
 
@@ -50,6 +51,8 @@ void print_help(const char *argv0, const OptionSet &extra) {
       "(default)\n");
   std::printf(
       "      --no-assert            keep Verilog assertions disabled\n");
+  std::printf(
+      "      --ideal                build the ideal backend for DPI calls\n");
   for (const RegisteredOption &option : extra.items()) {
     if (option.help.empty()) {
       continue;
@@ -130,6 +133,7 @@ ParseStatus parse_args(int argc, char **argv, OptionSet &extra,
   add_long("wave-path", required_argument, OPT_WAVE_PATH);
   add_long("assert", no_argument, OPT_ASSERT);
   add_long("no-assert", no_argument, OPT_NO_ASSERT);
+  add_long("ideal", no_argument, OPT_IDEAL);
   const std::vector<RegisteredOption> &service_options = extra.items();
   for (size_t index = 0; index < service_options.size(); ++index) {
     add_long(
@@ -199,6 +203,9 @@ ParseStatus parse_args(int argc, char **argv, OptionSet &extra,
         break;
       case OPT_NO_ASSERT:
         args->enable_assert = false;
+        break;
+      case OPT_IDEAL:
+        args->ideal = true;
         break;
       case '?':
         return ParseStatus::Error;

@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "platform/platform.h"
+#include "service/ideal/ideal.h"
+#include "service/lightsss/lightsss.h"
 #include "service/service.h"
 #include "session/args.h"
 #include "session/registry.h"
@@ -49,6 +51,8 @@ SimArgsView make_view(const SessionArgs& args) {
 
 Session::Session() : argc_(0), argv_(nullptr), ready_(false) {}
 
+Session::~Session() { ideal_close(); }
+
 const char* trap_label(int trap) {
   switch (trap) {
     case STATE_GOOD:
@@ -71,6 +75,7 @@ int trap_exit_code(int trap) {
 
 SessionStartup Session::open(int argc, char** argv) {
   ready_ = false;
+  ideal_close();
   services_ = make_services();
   OptionSet options;
   for (const std::unique_ptr<SimService>& service : services_) {
@@ -88,6 +93,10 @@ SessionStartup Session::open(int argc, char** argv) {
   args_ = std::move(args);
   argc_ = argc;
   argv_ = argv;
+  // Parameterized backends are built here. run() only drives the simulator.
+  if (args_.ideal) {
+    ideal_open();
+  }
   ready_ = true;
   return SessionStartup::kReady;
 }
@@ -106,14 +115,8 @@ SessionResult Session::run() {
   platform->eval();
 
   // --fork turns the parent waveform off. The resumed child opens its own.
-  bool defer_wave = false;
-  for (const std::unique_ptr<SimService>& service : services_) {
-    if (service->defer_waveform()) {
-      defer_wave = true;
-    }
-  }
   bool record = false;
-  if (args.dump_wave && !defer_wave) {
+  if (args.dump_wave && !lightsss_defer_waveform()) {
     if (!platform->trace_compiled()) {
       std::fprintf(stderr,
                    "waveform was requested, but this binary was built without "
@@ -206,11 +209,9 @@ SessionResult Session::run() {
       }
     }
     // The resumed checkpoint sets this from inside on_posedge.
+    // Only the platform has clone work. Services do not.
     if (context.clone_requested) {
       platform->at_clone();
-      for (const std::unique_ptr<SimService>& service : services_) {
-        service->at_clone();
-      }
       context.clone_requested = false;
     }
     if (context.waveform_requested) {

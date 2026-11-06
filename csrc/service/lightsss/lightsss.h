@@ -22,8 +22,10 @@ class LightsssService : public SimService {
   void register_options(OptionSet& options) override;
   bool init(const SimContext& context) override;
   int on_posedge(SimContext& context) override;
-  bool defer_waveform() const override;
   void finish(int trap) override;
+  // --fork is set. Not a SimService hook. Session calls
+  // lightsss_defer_waveform().
+  bool defer_waveform() const;
 
  private:
   static bool apply_interval(void* context, const char* value);
@@ -42,5 +44,9 @@ class LightsssService : public SimService {
   // front() is the newest checkpoint. back() is the oldest.
   std::deque<int> slots_;
 };
+
+// True when --fork is set. The parent must not open a waveform. The resumed
+// child opens its own. This is not a SimService hook.
+bool lightsss_defer_waveform();
 
 #endif

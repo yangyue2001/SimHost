@@ -23,6 +23,7 @@ struct SessionResult {
 class Session {
  public:
   Session();
+  ~Session();
 
   SessionStartup open(int argc, char** argv);
   SessionResult run();

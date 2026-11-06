@@ -23,7 +23,6 @@ namespace {
 // Offsets that are not 8-byte aligned, or that fall past words_, are rejected.
 constexpr uint64_t kDefaultRamBytes = 256ull << 20;
 // ELF p_paddr is a guest physical address. Offset 0 in words_ is this base.
-constexpr uint64_t kImageBase = 0x80000000ull;
 
 // DPI entry points are free functions, so they find the active service here.
 // init() publishes it and finish() clears it. A second service is refused.
@@ -159,12 +158,12 @@ bool load_elf(const std::vector<uint8_t>& file, std::vector<uint64_t>* words) {
       std::fprintf(stderr, "ELF segment %u is outside the file\n", index);
       return false;
     }
-    if (ph.p_paddr < kImageBase) {
+    if (ph.p_paddr < kFunctionalRamBase) {
       std::fprintf(stderr, "ELF segment %u is below RAM base\n", index);
       return false;
     }
     const uint8_t* src = file.data() + ph.p_offset;
-    if (!install_span(words, ph.p_paddr - kImageBase, src, ph.p_filesz,
+    if (!install_span(words, ph.p_paddr - kFunctionalRamBase, src, ph.p_filesz,
                       ph.p_memsz)) {
       return false;
     }
@@ -270,12 +269,25 @@ bool MemoryService::load_image() {
   return true;
 }
 
-/* 不一定需要*/
-const char* memory_image_path() {
+uint64_t memory_ram_bytes() {
   if (current_service == nullptr) {
-    return "";
+    return 0;
   }
-  return current_service->image_path();
+  return current_service->ram_bytes();
+}
+
+uint8_t* MemoryService::ram_data() {
+  if (words_.empty()) {
+    return nullptr;
+  }
+  return reinterpret_cast<uint8_t*>(words_.data());
+}
+
+uint8_t* memory_ram_data() {
+  if (current_service == nullptr) {
+    return nullptr;
+  }
+  return current_service->ram_data();
 }
 
 // The session does not know these names. They become --ram-size and the two
@@ -284,7 +296,7 @@ void MemoryService::register_options(OptionSet& options) {
   options.add_value("ram-size", &MemoryService::apply_ram_size, this,
                     "functional RAM size, for example 256MB");
   options.add_value("image", &MemoryService::apply_image, this,
-                    "ELF or raw binary; Difftest checks this same file");
+                    "ELF or raw binary loaded into functional RAM");
   options.add_value("dramsim3-ini", &MemoryService::apply_ini, this,
                     "DRAMSim3 ini file; requires the dram build");
   options.add_value("dramsim3-outdir", &MemoryService::apply_outdir, this,
@@ -371,14 +383,6 @@ bool MemoryService::word_index(uint64_t offset, uint64_t* index) const {
   }
   *index = word;
   return true;
-}
-
-// 给理想mmu用的 不一定有必要
-bool MemoryService::covers(uint64_t offset, uint64_t len) const {
-  if (len == 0 || ram_bytes_ == 0 || offset >= ram_bytes_) {
-    return false;
-  }
-  return len <= ram_bytes_ - offset;
 }
 
 // Merge selected bytes into the old word. A zero strobe bit keeps that byte.
@@ -535,10 +539,6 @@ extern "C" void memory_write(uint64_t offset, uint64_t data,
 
 extern "C" uint64_t memory_read(uint64_t offset) {
   return current_service->read_word(offset);
-}
-
-extern "C" unsigned char memory_covers(uint64_t offset, uint64_t len) {
-  return current_service->covers(offset, len) ? 1 : 0;
 }
 
 extern "C" uint64_t memory_response(unsigned char is_write) {

@@ -68,6 +68,8 @@ void wait_pid(int pid) {
   }
 }
 
+LightsssService* current = nullptr;
+
 }  // namespace
 
 struct LightsssShare : ShareBody {};
@@ -79,9 +81,14 @@ LightsssService::LightsssService()
       interval_ms_(kDefaultIntervalMs),
       last_cycle_(0),
       last_fork_ms_(0),
-      share_(nullptr) {}
+      share_(nullptr) {
+  current = this;
+}
 
 LightsssService::~LightsssService() {
+  if (current == this) {
+    current = nullptr;
+  }
   if (!is_child_) {
     clear_children();
   }
@@ -94,6 +101,10 @@ LightsssService::~LightsssService() {
 const char* LightsssService::name() const { return "lightsss"; }
 
 bool LightsssService::defer_waveform() const { return enabled_; }
+
+bool lightsss_defer_waveform() {
+  return current != nullptr && current->defer_waveform();
+}
 
 bool LightsssService::apply_interval(void* context, const char* value) {
   auto* service = static_cast<LightsssService*>(context);

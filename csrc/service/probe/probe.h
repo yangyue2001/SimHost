@@ -10,7 +10,7 @@
 // to 64 bits. A Bool named valid is 1 here: the call is skipped when it is 0.
 // kProbeMaxWords matches ProbeDpi.maxWords in the Scala probe package.
 constexpr int kProbeNameLength = 64;
-constexpr int kProbeMaxWords = 64;
+constexpr int kProbeMaxWords = 160;
 constexpr int kProbeMaxPending = 4096;
 
 struct ProbeSample {
@@ -37,8 +37,6 @@ class ProbeService : public SimService {
   const char* fail_reason() const { return reason_; }
   // Drop samples. A failure stays set so on_posedge() can still see it.
   void clear();
-  // Drop samples and clear the failure. Used before the main loop.
-  void discard();
 
  private:
   void fail(const char* reason);

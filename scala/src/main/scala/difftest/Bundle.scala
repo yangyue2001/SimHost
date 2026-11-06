@@ -5,39 +5,29 @@ import chisel3._
 // chisel3._ also brings in chisel3.probe. Use the root package.
 import _root_.probe.ProbeBundle
 
-// Difftest adds the hart id. It is always words[0]. Only hart 0 is accepted.
+// Hart id. Flattened probe words start here. The checker accepts only hart 0.
 abstract class DifftestBundle extends ProbeBundle {
   val coreid = UInt(8.W)
 }
 
-// words: coreid, valid, index, rfwen, wdest, pc, inst, wdata, skip.
-// index is the retire port. The oldest instruction is 0.
-// valid also gates the DPI call, so a pushed sample has valid == 1.
-class Commit extends DifftestBundle {
+// One committed ROB entry. Index 0 is the oldest entry in the cycle.
+// interrupt means do not execute this slot. The checker calls
+// difftest_raise_trap(cause, tval). cause is mcause: bit 63 set is an
+// interrupt, clear is a synchronous exception. size is the instruction
+// length in bytes and is not used for a trap.
+class DiffArchCommitInfo extends Bundle {
   val valid = Bool()
-  val index = UInt(8.W)
-  val rfwen = Bool()
-  val wdest = UInt(8.W)
-  val pc = UInt(64.W)
-  val inst = UInt(32.W)
-  val wdata = UInt(64.W)
   val skip = Bool()
+  val interrupt = Bool()
+  val size = UInt(8.W)
+  val cause = UInt(64.W)
+  val tval = UInt(64.W)
 }
 
-// words: coreid, value_0 .. value_31. value_0 is x0.
-// No valid field: the probe is sent on every non-reset cycle.
-class Xrf extends DifftestBundle {
-  val value = Vec(32, UInt(64.W))
-}
-
-// words: coreid, value_0 .. value_31. value_0 is f0.
-class Fpr extends DifftestBundle {
-  val value = Vec(32, UInt(64.W))
-}
-
-// words: coreid, then the difftest_csr argument order.
-class Csr extends DifftestBundle {
-  val privilege = UInt(8.W)
+// Architectural CSRs after this cycle's commits. sstatus is the visible
+// S-mode view. The reference keeps that view in mstatus, not a second copy.
+class DiffCSR extends Bundle {
+  val privilege = UInt(64.W)
   val mstatus = UInt(64.W)
   val sstatus = UInt(64.W)
   val mepc = UInt(64.W)
@@ -55,4 +45,19 @@ class Csr extends DifftestBundle {
   val sscratch = UInt(64.W)
   val mideleg = UInt(64.W)
   val medeleg = UInt(64.W)
+  val fcsr = UInt(64.W)
+}
+
+// Sampled only when the ROB commits. valid is the DPI enable. A nested
+// commit(i).valid does not enable the probe.
+// xrf, frf, csr, and pc are the architectural state after these commits.
+class DiffArchCommit(commitWidth: Int = 4) extends DifftestBundle {
+  require(commitWidth > 0)
+
+  val valid = Bool()
+  val commit = Vec(commitWidth, new DiffArchCommitInfo)
+  val xrf = Vec(32, UInt(64.W))
+  val frf = Vec(32, UInt(64.W))
+  val csr = new DiffCSR
+  val pc = UInt(64.W)
 }

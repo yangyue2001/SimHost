@@ -29,7 +29,7 @@ void ProbeService::push(const char* name, const uint64_t* words, int nwords) {
     return;
   }
   if (nwords > kProbeMaxWords) {
-    fail("probe sample is wider than 64 words");
+    fail("probe sample is wider than 160 words");
     return;
   }
   if (pending_.size() >= static_cast<size_t>(kProbeMaxPending)) {
@@ -47,9 +47,3 @@ void ProbeService::push(const char* name, const uint64_t* words, int nwords) {
 }
 
 void ProbeService::clear() { pending_.clear(); }
-
-void ProbeService::discard() {
-  pending_.clear();
-  failed_ = false;
-  reason_ = "";
-}

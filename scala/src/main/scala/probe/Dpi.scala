@@ -18,7 +18,7 @@ case class ProbeSpec(
 
 object ProbeDpi {
   // Same limit as kProbeMaxWords in csrc/service/probe/probe.h.
-  val maxWords = 64
+  val maxWords = 160
 
   def flatten(data: Data): Seq[(String, Data)] = {
     def walk(name: String, node: Data): Seq[(String, Data)] = node match {
